@@ -1,0 +1,6 @@
+{
+  "name": "AI Khata",
+  "description": "An AI-powered voice ledger and business assistant for small local businesses in Pakistan.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
