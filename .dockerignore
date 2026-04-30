@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Testing
+.jest/
+coverage/
+
+# Production
+.next/
+out/
+dist/
+
+# Misc
+.DS_Store
+*.md
+.env
+.env.local
+.env.*.local
+.git/
+.gitignore
+.eslintrc
+.prettierrc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System files
+Thumbs.db
+desktop.ini
+
+# Development files
+tmp-supabase-test.mjs
+DEBUG_JSON_ERROR.md
+ALL_ERRORS_FIXED.md
+MIGRATION_GUIDE.md
+PRODUCTION_CHECKLIST.md
+SOLUTION_SUMMARY.md
+STATUS_FINAL.md
+ENV_SETUP.md
+FIXES_APPLIED.md
+QUICK_START.md
