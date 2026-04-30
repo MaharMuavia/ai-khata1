@@ -2,12 +2,12 @@
 
 import * as React from "react";
 import { useState, useEffect, useRef } from "react";
-import { Mic, MicOff, Send, Calculator, FileText, Trash2, Edit2, TrendingUp, TrendingDown, DollarSign, Users, X } from "lucide-react";
+import { Mic, MicOff, Send, Calculator, FileText, Trash2, Edit2, TrendingUp, TrendingDown, DollarSign, Users, X, Download } from "lucide-react";
 import { useTransactions } from "@/hooks/use-transactions";
 import { parseTransactionCommand } from "@/lib/gemini";
 import { v4 as uuidv4 } from "uuid";
 import { Transaction } from "@/lib/types";
-import { format } from "date-fns";
+import { isToday, isYesterday, isThisWeek, isThisMonth, format } from "date-fns";
 import {
   BarChart,
   Bar,
@@ -42,6 +42,7 @@ export default function MainDashboard() {
   const [botMessage, setBotMessage] = useState("Assalam o Alaikum! Mai aapka AI assistant. Entry likhen ya bolen.");
   const [view, setView] = useState<"ledger" | "report">("ledger");
   const [editTx, setEditTx] = useState<Transaction | null>(null);
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "week" | "month">("all");
 
   const recognitionRef = useRef<any>(null);
 
@@ -62,7 +63,7 @@ export default function MainDashboard() {
         setBotMessage(result.clarificationMessage || "Mujhe kuch tafseelaat chaliye, dobara batayen.");
       } else {
         if (result.action === "add") {
-          addTransaction({
+          await addTransaction({
             id: uuidv4(),
             category: result.category || "sales",
             amount: result.amount || 0,
@@ -72,16 +73,16 @@ export default function MainDashboard() {
             timestamp: Date.now(),
           });
         } else if (result.action === "edit" && result.targetId) {
-          updateTransaction(result.targetId, {
+          await updateTransaction(result.targetId, {
             amount: result.amount,
             category: result.category,
             item: result.item,
             customerName: result.customerName,
           });
         } else if (result.action === "delete" && result.targetId) {
-          deleteTransaction(result.targetId);
+          await deleteTransaction(result.targetId);
         } else if (result.action === "delete_last") {
-          deleteLast();
+          await deleteLast();
         } else if (result.action === "report") {
           setView("report");
         }
@@ -91,7 +92,14 @@ export default function MainDashboard() {
       }
     } catch (error) {
       console.error(error);
-      setBotMessage("Maazrat, samajh nahi aaya. Dobara koshish karen.");
+      const message = error instanceof Error ? error.message : "";
+      if (message.toLowerCase().includes("row-level security")) {
+        setBotMessage("Supabase ne save reject kar diya. Transactions table ki RLS insert policy check karen.");
+      } else if (message.toLowerCase().includes("gemini")) {
+        setBotMessage("Gemini API key ya AI parsing me masla hai. Env key check karen.");
+      } else {
+        setBotMessage("Maazrat, entry save nahi ho saki. Console me error details hain.");
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -103,7 +111,7 @@ export default function MainDashboard() {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = false;
-      // Leave lang default or set to 'en-US' / 'ur-PK'. Default often handles mixed best.
+      recognitionRef.current.lang = "en-US";
       
       recognitionRef.current.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
@@ -113,6 +121,13 @@ export default function MainDashboard() {
 
       recognitionRef.current.onerror = (event: any) => {
         console.error("Speech recognition error", event.error);
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          setBotMessage("Mic permission block hai. Browser me microphone allow karen.");
+        } else if (event.error === "no-speech") {
+          setBotMessage("Awaaz detect nahi hui. Dobara mic dabakar bolen.");
+        } else {
+          setBotMessage(`Mic error: ${event.error}. Chrome/Edge aur HTTPS ya localhost par try karen.`);
+        }
         setIsRecording(false);
       };
 
@@ -123,13 +138,24 @@ export default function MainDashboard() {
   }, [handleProcessCommand]); 
 
   const toggleRecording = () => {
+    if (!recognitionRef.current) {
+      setBotMessage("Voice input is browser me available nahi. Text entry use karen ya Chrome/Edge me kholen.");
+      return;
+    }
+
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
     } else {
       setInputText("");
-      recognitionRef.current?.start();
-      setIsRecording(true);
+      try {
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } catch (error) {
+        console.error("Failed to start speech recognition", error);
+        setIsRecording(false);
+        setBotMessage("Mic start nahi ho saka. Page refresh kar ke permission dobara allow karen.");
+      }
     }
   };
 
@@ -137,14 +163,56 @@ export default function MainDashboard() {
     return null;
   }
 
+  // Filter transactions
+  const filteredTransactions = transactions.filter((t) => {
+    switch (dateFilter) {
+      case "today":
+        return isToday(t.timestamp);
+      case "yesterday":
+        return isYesterday(t.timestamp);
+      case "week":
+        return isThisWeek(t.timestamp, { weekStartsOn: 1 });
+      case "month":
+        return isThisMonth(t.timestamp);
+      default:
+        return true;
+    }
+  });
+
+  const downloadReport = () => {
+    if (filteredTransactions.length === 0) return;
+
+    // Headers
+    const headers = ["Date", "Time", "Category", "Item/Customer", "Amount (Rs)"];
+    
+    // Rows
+    const rows = filteredTransactions.map(t => {
+      const date = format(t.timestamp, "yyyy-MM-dd");
+      const time = format(t.timestamp, "HH:mm:ss");
+      const category = t.category.toUpperCase();
+      const itemOrCustomer = t.item || t.customerName || "General Entry";
+      const amount = t.amount;
+      return [date, time, category, `"${itemOrCustomer}"`, amount].join(",");
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `AI_Khata_Report_${dateFilter}.csv`);
+    document.body.appendChild(link); // Required for FF
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // Stats calculation
-  const totalSales = transactions.filter(t => t.category === "sales").reduce((sum, t) => sum + t.amount, 0);
-  const totalExpenses = transactions.filter(t => t.category === "expense").reduce((sum, t) => sum + t.amount, 0);
-  const totalUdhaarGiven = transactions.filter(t => t.category === "udhaar" && t.status === "unpaid").reduce((sum, t) => sum + t.amount, 0);
+  const totalSales = filteredTransactions.filter(t => t.category === "sales").reduce((sum, t) => sum + t.amount, 0);
+  const totalExpenses = filteredTransactions.filter(t => t.category === "expense").reduce((sum, t) => sum + t.amount, 0);
+  const totalUdhaarGiven = filteredTransactions.filter(t => t.category === "udhaar" && t.status === "unpaid").reduce((sum, t) => sum + t.amount, 0);
   const netProfit = totalSales - totalExpenses;
 
   // Group transactions by date
-  const groupedTransactions = transactions.reduce((acc, t) => {
+  const groupedTransactions = filteredTransactions.reduce((acc, t) => {
     const dateStr = format(t.timestamp, "d MMM yyyy");
     if (!acc[dateStr]) acc[dateStr] = [];
     acc[dateStr].push(t);
@@ -168,6 +236,24 @@ export default function MainDashboard() {
           <p className="text-xs opacity-80">Smart Business Assistant</p>
         </div>
         <div className="flex gap-2">
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as any)}
+            className="bg-emerald-700 text-white border-none rounded-lg p-2 text-sm outline-none"
+          >
+            <option value="all">All Time</option>
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+          </select>
+          <button 
+            onClick={downloadReport}
+            className="p-2 rounded-lg transition-colors hover:bg-emerald-500"
+            title="Download CSV Report"
+          >
+            <Download size={20} />
+          </button>
           <button 
             onClick={() => setView("ledger")}
             className={`p-2 rounded-lg transition-colors ${view === "ledger" ? "bg-emerald-700" : "hover:bg-emerald-500"}`}
@@ -237,9 +323,9 @@ export default function MainDashboard() {
             {/* Ledger List */}
             <div>
               <h2 className="font-semibold text-stone-800 mb-3 ml-1">Recent Entries</h2>
-              {transactions.length === 0 ? (
+            {filteredTransactions.length === 0 ? (
                 <div className="text-center p-8 border-2 border-dashed border-stone-200 rounded-xl text-stone-400">
-                  No records yet. Koi entry bol kar ya likh kar add karen.
+                  {transactions.length === 0 ? "No records yet. Koi entry bol kar ya likh kar add karen." : "No records found for the selected period."}
                 </div>
               ) : (
                 <div className="space-y-6">
@@ -278,7 +364,17 @@ export default function MainDashboard() {
                                  <button onClick={() => setEditTx(t)} className="text-stone-400 hover:text-blue-500 transition-colors">
                                    <Edit2 size={14} />
                                  </button>
-                                 <button onClick={() => deleteTransaction(t.id)} className="text-stone-400 hover:text-red-500 transition-colors">
+                                 <button
+                                   onClick={async () => {
+                                     try {
+                                       await deleteTransaction(t.id);
+                                     } catch (error) {
+                                       console.error(error);
+                                       setBotMessage("Entry delete nahi ho saki. Supabase policy check karen.");
+                                     }
+                                   }}
+                                   className="text-stone-400 hover:text-red-500 transition-colors"
+                                 >
                                    <Trash2 size={14} />
                                  </button>
                                </div>
@@ -415,14 +511,19 @@ export default function MainDashboard() {
               </div>
 
               <button 
-                onClick={() => {
-                  updateTransaction(editTx.id, {
-                    category: editTx.category,
-                    amount: editTx.amount,
-                    item: editTx.item,
-                    customerName: editTx.customerName,
-                  });
-                  setEditTx(null);
+                onClick={async () => {
+                  try {
+                    await updateTransaction(editTx.id, {
+                      category: editTx.category,
+                      amount: editTx.amount,
+                      item: editTx.item,
+                      customerName: editTx.customerName,
+                    });
+                    setEditTx(null);
+                  } catch (error) {
+                    console.error(error);
+                    setBotMessage("Entry update nahi ho saki. Supabase policy check karen.");
+                  }
                 }}
                 className="w-full bg-emerald-600 text-white font-semibold rounded-lg p-3 hover:bg-emerald-700 transition"
               >

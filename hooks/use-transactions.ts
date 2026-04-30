@@ -1,43 +1,117 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
 import { Transaction } from "@/lib/types";
+
+function normalizeTransactions(rows: any[]): Transaction[] {
+  return rows.map((row) => ({
+    id: row.id,
+    category: row.category,
+    amount: Number(row.amount),
+    item: row.item ?? undefined,
+    customerName: row.customer_name ?? undefined,
+    status: row.status ?? undefined,
+    timestamp:
+      typeof row.timestamp === "string"
+        ? new Date(row.timestamp).getTime()
+        : row.timestamp,
+  }));
+}
 
 export function useTransactions() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const saved = localStorage.getItem("ai_khata_txs");
-        if (saved) setTransactions(JSON.parse(saved));
-      } catch (e) {}
-    }
-    setIsLoaded(true);
+    const fetchTransactions = async () => {
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .order("timestamp", { ascending: false });
+
+      if (error) {
+        console.error("Failed to load transactions:", error.message);
+        setIsLoaded(true);
+        return;
+      }
+
+      setTransactions(normalizeTransactions(data ?? []));
+      setIsLoaded(true);
+    };
+
+    fetchTransactions();
   }, []);
 
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem("ai_khata_txs", JSON.stringify(transactions));
+  const addTransaction = useCallback(async (t: Transaction) => {
+    const { data, error } = (await supabase
+      .from("transactions")
+      .insert([
+        {
+          id: t.id,
+          category: t.category,
+          amount: t.amount,
+          item: t.item,
+          customer_name: t.customerName,
+          status: t.status,
+          timestamp: new Date(t.timestamp).toISOString(),
+        },
+      ])
+      .select("*")) as { data: any[] | null; error: any };
+
+    if (error) {
+      console.error("Failed to add transaction:", error.message);
+      throw error;
     }
-  }, [transactions, isLoaded]);
 
-  const addTransaction = (t: Transaction) => {
-    setTransactions((prev) => [t, ...prev]);
-  };
+    if (data?.length) {
+      setTransactions((prev) => [normalizeTransactions(data)[0], ...prev]);
+    }
+  }, []);
 
-  const updateTransaction = (id: string, updates: Partial<Transaction>) => {
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
-    );
-  };
+  const updateTransaction = useCallback(async (id: string, updates: Partial<Transaction>) => {
+    const payload: any = {};
 
-  const deleteTransaction = (id: string) => {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
-  };
+    if (updates.category !== undefined) payload.category = updates.category;
+    if (updates.amount !== undefined) payload.amount = updates.amount;
+    if (updates.item !== undefined) payload.item = updates.item;
+    if (updates.customerName !== undefined)
+      payload.customer_name = updates.customerName;
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.timestamp !== undefined)
+      payload.timestamp = new Date(updates.timestamp).toISOString();
 
-  const deleteLast = () => {
-    setTransactions((prev) => prev.slice(1));
-  };
+    const { data, error } = await supabase
+      .from("transactions")
+      .update(payload)
+      .eq("id", id)
+      .select("*");
+
+    if (error) {
+      console.error("Failed to update transaction:", error.message);
+      throw error;
+    }
+
+    if (data?.length) {
+      setTransactions((prev) =>
+        prev.map((tx) => (tx.id === id ? normalizeTransactions(data)[0] : tx))
+      );
+    }
+  }, []);
+
+  const deleteTransaction = useCallback(async (id: string) => {
+    const { error } = await supabase.from("transactions").delete().eq("id", id);
+
+    if (error) {
+      console.error("Failed to delete transaction:", error.message);
+      throw error;
+    }
+
+    setTransactions((prev) => prev.filter((tx) => tx.id !== id));
+  }, []);
+
+  const deleteLast = useCallback(async () => {
+    if (transactions.length === 0) return;
+    await deleteTransaction(transactions[0].id);
+  }, [deleteTransaction, transactions]);
 
   return {
     transactions,
@@ -48,5 +122,3 @@ export function useTransactions() {
     deleteLast,
   };
 }
-
-
