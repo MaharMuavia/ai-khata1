@@ -4,7 +4,6 @@ import * as React from "react";
 import { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, Send, Calculator, FileText, Trash2, Edit2, TrendingUp, TrendingDown, DollarSign, Users, X, Download } from "lucide-react";
 import { useTransactions } from "@/hooks/use-transactions";
-import { parseTransactionCommand } from "@/lib/gemini";
 import { v4 as uuidv4 } from "uuid";
 import { Transaction } from "@/lib/types";
 import { isToday, isYesterday, isThisWeek, isThisMonth, format } from "date-fns";
@@ -66,7 +65,24 @@ export default function MainDashboard({
     setBotMessage("Soch raha hoon...");
     
     try {
-      const result = await parseTransactionCommand(text, transactionsRef.current.slice(0, 10)); // send last 10 for context
+      const response = await fetch("/api/parse-command", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          recentTransactions: transactionsRef.current.slice(0, 10),
+        }),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to parse transaction command");
+      }
+
+      const result = payload.data;
       
       if (result.needsClarification) {
         setBotMessage(result.clarificationMessage || "Mujhe kuch tafseelaat chaliye, dobara batayen.");
