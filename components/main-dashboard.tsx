@@ -26,7 +26,16 @@ declare global {
   }
 }
 
-export default function MainDashboard() {
+type MainDashboardProps = {
+  shopName?: string;
+  mobileNumber?: string;
+  onChangeShop?: () => void;
+};
+
+export default function MainDashboard({
+  shopName = "AI Khata",
+  onChangeShop,
+}: MainDashboardProps) {
   const {
     transactions,
     isLoaded,
@@ -93,13 +102,19 @@ export default function MainDashboard() {
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : "";
+      let errorMsg = "Maazrat, entry save nahi ho saki. Console me error details hain.";
+      
       if (message.toLowerCase().includes("row-level security")) {
-        setBotMessage("Supabase ne save reject kar diya. Transactions table ki RLS insert policy check karen.");
+        errorMsg = "Supabase me RLS policy issue hai. .env.local me SUPABASE_SERVICE_ROLE_KEY set karen.";
+      } else if (message.toLowerCase().includes("supabase_service_role_key")) {
+        errorMsg = "SUPABASE_SERVICE_ROLE_KEY .env.local me nahi hai. Supabase dashboard se service role key copy karke set karen.";
+      } else if (message.toLowerCase().includes("missing") && message.toLowerCase().includes("env")) {
+        errorMsg = "Environment variables set nahi hain. .env.local file check karen.";
       } else if (message.toLowerCase().includes("gemini")) {
-        setBotMessage("Gemini API key ya AI parsing me masla hai. Env key check karen.");
-      } else {
-        setBotMessage("Maazrat, entry save nahi ho saki. Console me error details hain.");
+        errorMsg = "Gemini API key ya AI parsing me masla hai. Env key check karen.";
       }
+      
+      setBotMessage(errorMsg);
     } finally {
       setIsProcessing(false);
     }
@@ -115,8 +130,8 @@ export default function MainDashboard() {
       
       recognitionRef.current.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
-        setInputText(transcript);
-        handleProcessCommand(transcript);
+              setInputText("");
+              void handleProcessCommand(transcript);
       };
 
       recognitionRef.current.onerror = (event: any) => {
@@ -179,27 +194,51 @@ export default function MainDashboard() {
     }
   });
 
+  const csvEscape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+  const toCsvRow = (values: Array<string | number>) => values.map(csvEscape).join(",");
+  const safeFileName =
+    shopName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "ai_khata";
+
   const downloadReport = () => {
     if (filteredTransactions.length === 0) return;
 
-    // Headers
     const headers = ["Date", "Time", "Category", "Item/Customer", "Amount (Rs)"];
+    const totalSales = filteredTransactions.filter(t => t.category === "sales").reduce((sum, t) => sum + t.amount, 0);
+    const totalExpenses = filteredTransactions.filter(t => t.category === "expense").reduce((sum, t) => sum + t.amount, 0);
+    const totalUdhaar = filteredTransactions.filter(t => t.category === "udhaar" && t.status === "unpaid").reduce((sum, t) => sum + t.amount, 0);
+    const reportNetProfit = totalSales - totalExpenses;
+    const profitLabel = reportNetProfit >= 0 ? "Profit" : "Loss";
     
-    // Rows
     const rows = filteredTransactions.map(t => {
       const date = format(t.timestamp, "yyyy-MM-dd");
       const time = format(t.timestamp, "HH:mm:ss");
       const category = t.category.toUpperCase();
       const itemOrCustomer = t.item || t.customerName || "General Entry";
       const amount = t.amount;
-      return [date, time, category, `"${itemOrCustomer}"`, amount].join(",");
+      return toCsvRow([date, time, category, itemOrCustomer, amount]);
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+    const csvContent = "data:text/csv;charset=utf-8," + [
+      toCsvRow(["AI Khata Report"]),
+      toCsvRow(["Shop Name", shopName]),
+      toCsvRow(["Report Filter", dateFilter]),
+      toCsvRow(["Generated At", format(new Date(), "yyyy-MM-dd HH:mm:ss")]),
+      "",
+      toCsvRow(["Summary"]),
+      toCsvRow(["Total Sales", totalSales]),
+      toCsvRow(["Total Expenses", totalExpenses]),
+      toCsvRow(["Udhaar Outstanding", totalUdhaar]),
+      toCsvRow(["Net Profit", reportNetProfit]),
+      toCsvRow(["Profit Status", profitLabel]),
+      "",
+      toCsvRow(["Transaction Details"]),
+      toCsvRow(headers),
+      ...rows,
+    ].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `AI_Khata_Report_${dateFilter}.csv`);
+    link.setAttribute("download", `AI_Khata_${safeFileName}_Report_${dateFilter}.csv`);
     document.body.appendChild(link); // Required for FF
     link.click();
     document.body.removeChild(link);
@@ -210,6 +249,9 @@ export default function MainDashboard() {
   const totalExpenses = filteredTransactions.filter(t => t.category === "expense").reduce((sum, t) => sum + t.amount, 0);
   const totalUdhaarGiven = filteredTransactions.filter(t => t.category === "udhaar" && t.status === "unpaid").reduce((sum, t) => sum + t.amount, 0);
   const netProfit = totalSales - totalExpenses;
+  const isProfitPositive = netProfit >= 0;
+  const totalEntries = filteredTransactions.length;
+  const formatAmount = (amount: number) => amount.toLocaleString();
 
   // Group transactions by date
   const groupedTransactions = filteredTransactions.reduce((acc, t) => {
@@ -231,9 +273,8 @@ export default function MainDashboard() {
     <div className="max-w-md mx-auto min-h-screen flex flex-col bg-stone-50 shadow-xl overflow-hidden relative">
       {/* Header */}
       <header className="bg-emerald-600 text-white p-4 shadow-md z-10 flex justify-between items-center">
-        <div>
-          <h1 className="text-xl font-bold">AI Khata</h1>
-          <p className="text-xs opacity-80">Smart Business Assistant</p>
+        <div className="min-w-0 flex-1 pr-3">
+          <h1 className="text-lg font-bold leading-tight whitespace-normal break-words">{shopName}</h1>
         </div>
         <div className="flex gap-2">
           <select
@@ -266,6 +307,15 @@ export default function MainDashboard() {
           >
             <FileText size={20} />
           </button>
+          {onChangeShop && (
+            <button
+              onClick={onChangeShop}
+              className="p-2 rounded-lg transition-colors hover:bg-emerald-500"
+              title="Change shop"
+            >
+              <X size={20} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -389,31 +439,92 @@ export default function MainDashboard() {
             </div>
           </div>
         ) : (
-          <div className="space-y-6">
-            <h2 className="font-bold text-xl text-stone-800 ml-1">Business Report</h2>
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-100">
-              <h3 className="text-stone-500 mb-4 text-sm font-medium">Financial Overview</h3>
-              <div className="h-64 w-full">
+          <div className="space-y-5">
+            <div className="rounded-[28px] bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 p-[1px] shadow-lg shadow-emerald-200/60">
+              <div className="rounded-[27px] bg-white p-5">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-600">Business Report</p>
+                    <h2 className="mt-1 text-2xl font-bold text-stone-900 break-words">{shopName}</h2>
+                    <p className="mt-1 text-sm text-stone-500">A clean snapshot of sales, expense, and profit for the selected period.</p>
+                  </div>
+                  <div className="rounded-2xl bg-emerald-50 px-3 py-2 text-right border border-emerald-100">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Filter</p>
+                    <p className="text-sm font-semibold text-stone-800 capitalize">{dateFilter === "all" ? "All Time" : dateFilter}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-stone-50 p-4 border border-stone-100">
+                    <p className="text-xs font-medium text-stone-500 mb-2">Net Profit</p>
+                    <div className={`text-2xl font-black ${isProfitPositive ? "text-emerald-600" : "text-red-600"}`}>
+                      Rs {formatAmount(netProfit)}
+                    </div>
+                    <p className={`mt-1 text-xs font-medium ${isProfitPositive ? "text-emerald-700" : "text-red-600"}`}>
+                      {isProfitPositive ? "Profit" : "Loss"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-stone-50 p-4 border border-stone-100">
+                    <p className="text-xs font-medium text-stone-500 mb-2">Total Sales</p>
+                    <div className="text-2xl font-black text-stone-900">Rs {formatAmount(totalSales)}</div>
+                    <p className="mt-1 text-xs font-medium text-stone-500">{totalEntries} entries recorded</p>
+                  </div>
+                  <div className="rounded-2xl bg-stone-50 p-4 border border-stone-100">
+                    <p className="text-xs font-medium text-stone-500 mb-2">Expenses</p>
+                    <div className="text-2xl font-black text-red-600">Rs {formatAmount(totalExpenses)}</div>
+                    <p className="mt-1 text-xs font-medium text-stone-500">Money spent</p>
+                  </div>
+                  <div className="rounded-2xl bg-stone-50 p-4 border border-stone-100">
+                    <p className="text-xs font-medium text-stone-500 mb-2">Udhaar</p>
+                    <div className="text-2xl font-black text-amber-600">Rs {formatAmount(totalUdhaarGiven)}</div>
+                    <p className="mt-1 text-xs font-medium text-stone-500">Unpaid balance</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-white p-4 shadow-sm border border-stone-100">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-bold text-stone-900">Financial Overview</h3>
+                  <p className="text-sm text-stone-500">Sales vs expense vs profit</p>
+                </div>
+                <div className={`rounded-full px-3 py-1 text-xs font-semibold ${isProfitPositive ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-600"}`}>
+                  {isProfitPositive ? "Profit up" : "Loss alert"}
+                </div>
+              </div>
+              <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#6b7280', fontSize: 12}} dy={10} />
                     <YAxis axisLine={false} tickLine={false} tick={{fill: '#6b7280', fontSize: 12}} />
-                    <Tooltip cursor={{fill: '#f3f4f6'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                    <Bar dataKey="amount" fill="#059669" radius={[4, 4, 0, 0]} />
+                    <Tooltip
+                      cursor={{ fill: '#f3f4f6' }}
+                      contentStyle={{
+                        borderRadius: '12px',
+                        border: 'none',
+                        boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                      }}
+                    />
+                    <Bar dataKey="amount" fill="#059669" radius={[8, 8, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
-             <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-100">
-                  <p className="text-stone-500 mb-1">Net Profit</p>
-                  <p className="font-bold text-xl text-emerald-600">Rs {netProfit}</p>
+
+            <div className="rounded-3xl bg-white p-4 shadow-sm border border-stone-100">
+              <h3 className="font-bold text-stone-900 mb-3">Report Notes</h3>
+              <div className="space-y-3 text-sm text-stone-600">
+                <div className="flex items-center justify-between rounded-2xl bg-stone-50 px-4 py-3">
+                  <span>Total transactions</span>
+                  <span className="font-semibold text-stone-900">{totalEntries}</span>
                 </div>
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-100">
-                  <p className="text-stone-500 mb-1">Total Sales</p>
-                  <p className="font-bold text-xl text-stone-800">Rs {totalSales}</p>
+                <div className="flex items-center justify-between rounded-2xl bg-stone-50 px-4 py-3">
+                  <span>Date range</span>
+                  <span className="font-semibold text-stone-900 capitalize">{dateFilter === "all" ? "All Time" : dateFilter}</span>
                 </div>
+              </div>
             </div>
           </div>
         )}
